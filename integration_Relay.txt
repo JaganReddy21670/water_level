@@ -1,0 +1,104 @@
+#include <WiFi.h>
+#include <WebServer.h>
+
+// --- WIFI SETTINGS ---
+const char* SSID = "Data";
+const char* PASSWORD = "8341347337";
+
+WebServer server(80);
+
+// --- PIN DEFINITIONS ---
+const int relayPin = 13;   // Connect Relay here
+const int LED_BUILTI = 2;  // Onboard LED
+const int LED_BUILT1 = 26; // External LED 1
+const int LED_BUILT2 = 15; // External LED 2
+
+// LOGIC CONFIGURATION
+bool isActiveLow = true; 
+
+// --- LOGIC HELPER FUNCTIONS ---
+// Defined early so setup() can use them
+
+void turnRelayOn() {
+  // 1. Turn Relay ON
+  // Based on your code provided: Writing HIGH turns it ON
+  if (isActiveLow) {
+    digitalWrite(relayPin, LOW); 
+  } else {
+    digitalWrite(relayPin, HIGH); 
+  }
+
+  // 2. Turn LEDs ON (Visual indicator)
+  // Logic: BuiltIn and LED1 go HIGH, LED2 goes LOW
+  digitalWrite(LED_BUILTI, HIGH); 
+  digitalWrite(LED_BUILT1, HIGH);
+  digitalWrite(LED_BUILT2, LOW);
+}
+
+void turnRelayOff() {
+  // 1. Turn Relay OFF
+  // Based on your code provided: Writing LOW turns it OFF
+  if (isActiveLow) {
+    digitalWrite(relayPin, HIGH); 
+  } else {
+    digitalWrite(relayPin, LOW); 
+  }
+
+  // 2. Turn LEDs OFF
+  // Logic: BuiltIn and LED1 go LOW, LED2 goes HIGH (Standby Light)
+  digitalWrite(LED_BUILTI, LOW);
+  digitalWrite(LED_BUILT1, LOW);
+  digitalWrite(LED_BUILT2, HIGH);
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // 1. Initialize ALL pins
+  pinMode(relayPin, OUTPUT);
+  pinMode(LED_BUILTI, OUTPUT);
+  pinMode(LED_BUILT1, OUTPUT);
+  pinMode(LED_BUILT2, OUTPUT);
+
+  // 2. SAFETY STARTUP: Force everything to OFF state
+  turnRelayOff();
+
+  // 3. Connect to WiFi
+  Serial.print("Connecting to ");
+  Serial.println(SSID);
+  WiFi.begin(SSID, PASSWORD);
+   
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+   
+  Serial.println("");
+  Serial.println("WiFi Connected!");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  // --- WEB SERVER COMMANDS ---
+
+  // Command: /ON 
+  server.on("/ON", []() {
+    turnRelayOn();
+    server.send(200, "text/plain", "STATE: ON (LED2 is OFF)");
+    Serial.println("Command Received: ON");
+  });
+
+  // Command: /OFF 
+  server.on("/OFF", []() {
+    turnRelayOff();
+    server.send(200, "text/plain", "STATE: OFF (LED2 is ON)");
+    Serial.println("Command Received: OFF");
+  });
+
+  // Start Server
+  server.begin();
+  Serial.println("Web Server Started.");
+}
+
+void loop() {
+  server.handleClient();
+}
