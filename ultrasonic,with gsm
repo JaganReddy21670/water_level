@@ -1,0 +1,152 @@
+// ===== Define modem BEFORE including TinyGsm =====
+#define TINY_GSM_MODEM_SIM800
+#define TINY_GSM_RX_BUFFER 1024
+
+#include <NewPing.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <TinyGsmClient.h>
+
+// ========== GSM Configuration ==========
+#define SerialAT Serial1
+#define SerialMon Serial
+
+#define SERVER "api.thingspeak.com"
+#define PORT 80
+#define API_KEY "ZBPLK4WKJL9OCRRL"
+#define APN "cmnet"
+
+// ========== Pin Definitions ==========
+#define ONE_WIRE_BUS 4    // DS18B20 GPIO4
+#define TRIGGER_PIN 5     // JSN-SR04T Trigger GPIO5
+#define ECHO_PIN 18       // JSN-SR04T Echo GPIO18
+#define RX 16             // SIM800 RX (to ESP32 TX16)
+#define TX 17             // SIM800 TX (to ESP32 RX17)
+
+// ========== Objects ==========
+NewPing sonar(TRIGGER_PIN, ECHO_PIN, 600);
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature tempSensor(&oneWire);
+TinyGsm modem(SerialAT);
+TinyGsmClient client(modem);
+
+// ========== Function Prototypes ==========
+unsigned int getMedianDistance();
+void sendToThingSpeak(unsigned int distance, float temp);
+
+// =========================================================
+void setup() {
+  SerialMon.begin(115200);
+  delay(3000);
+  SerialMon.println("Setup started");
+
+  // Initialize sensors
+  tempSensor.begin();
+
+  // Start GSM
+  SerialMon.println("Initializing GSM...");
+  SerialAT.begin(9600, SERIAL_8N1, RX, TX);
+
+  modem.restart();
+
+  SerialMon.println("Connecting to GSM network...");
+  if (!modem.waitForNetwork(60000L)) {
+    SerialMon.println("Network connection failed!");
+    while (true) delay(1000);
+  }
+
+  SerialMon.println("Connecting to GPRS...");
+  if (!modem.gprsConnect(APN)) {
+    SerialMon.println("GPRS connection failed!");
+    while (true) delay(1000);
+  }
+
+  SerialMon.println(" GSM Ready and Connected to Internet!");
+  SerialMon.println("Setup complete. Starting loop...\n");
+}
+
+// =========================================================
+void loop() {
+  tempSensor.requestTemperatures();
+  float temperature = tempSensor.getTempCByIndex(0);
+  unsigned int distance = getMedianDistance();
+
+  SerialMon.print("Distance: ");
+  SerialMon.print(distance);
+  SerialMon.print(" cm, Temp: ");
+  SerialMon.print(temperature);
+  SerialMon.println(" °C");
+
+  sendToThingSpeak(distance, temperature);
+
+  delay(20000);  // Send every 20 seconds
+}
+
+// =========================================================
+unsigned int getMedianDistance() {
+  const int samples = 11;
+  unsigned int readings[samples];
+
+  for (int i = 0; i < samples; i++) {
+    readings[i] = sonar.ping_cm();
+    delay(60);
+  }
+
+  // Sort readings (Insertion sort)
+  for (int i = 1; i < samples; i++) {
+    unsigned int key = readings[i];
+    int j = i - 1;
+    while (j >= 0 && readings[j] > key) {
+      readings[j + 1] = readings[j];
+      j--;
+    }
+    readings[j + 1] = key;
+  }
+
+  return readings[samples / 2];
+}
+
+// =========================================================
+void sendToThingSpeak(unsigned int distance, float temp) {
+  if (!modem.isGprsConnected()) {
+    SerialMon.println("Reconnecting GPRS...");
+    modem.gprsConnect(APN);
+    if (!modem.isGprsConnected()) {
+      SerialMon.println("GPRS reconnect failed!");
+      return;
+    }
+  }
+
+  SerialMon.print("Connecting to ");
+  SerialMon.print(SERVER);
+  
+  if (!client.connect(SERVER, PORT)) {
+    SerialMon.println(" -> Connection failed");
+    return;
+  }
+
+  SerialMon.println(" -> Connected");
+  SerialMon.println("Sending data to ThingSpeak...");
+
+  //  Field1 = Temperature, Field2 = Distance
+  String httpRequestData = String("GET /update?api_key=") + API_KEY +
+                           "&field1=" + String(temp) +
+                           "&field2=" + String(distance) +
+                           " HTTP/1.1\r\n" +
+                           "Host: " + SERVER + "\r\n" +
+                           "Connection: close\r\n\r\n";
+
+  client.print(httpRequestData);
+
+  unsigned long timeout = millis();
+  while (client.connected() && millis() - timeout < 10000L) {
+    while (client.available()) {
+      String line = client.readStringUntil('\n');
+      SerialMon.println(line);
+      timeout = millis();
+    }
+  }
+
+  client.stop();
+  SerialMon.println(" Data sent to ThingSpeak!\n");
+}
